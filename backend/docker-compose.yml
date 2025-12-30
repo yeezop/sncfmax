@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  sncfmax-backend:
+    build: .
+    container_name: sncfmax-backend
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    # Security options for Chromium
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined

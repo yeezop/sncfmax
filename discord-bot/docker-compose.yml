@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  sncfmax-backend:
+    build: ../backend
+    container_name: sncfmax-backend
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+
+  discord-bot:
+    build: .
+    container_name: tgvmax-discord-bot
+    restart: unless-stopped
+    depends_on:
+      - sncfmax-backend
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      - BACKEND_URL=http://sncfmax-backend:3000
