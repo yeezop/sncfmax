@@ -14,13 +14,13 @@ services:
     security_opt:
       - seccomp=unconfined
 
-  discord-bot:
-    build: .
-    container_name: tgvmax-discord-bot
-    restart: unless-stopped
-    depends_on:
-      - sncfmax-backend
-    environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
-      - BACKEND_URL=http://sncfmax-backend:3000
+  # discord-bot:
+  #   build: .
+  #   container_name: tgvmax-discord-bot
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - sncfmax-backend
+  #   environment:
+  #     - DISCORD_TOKEN=${DISCORD_TOKEN}
+  #     - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+  #     - BACKEND_URL=http://sncfmax-backend:3000

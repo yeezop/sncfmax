@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show min;
 import 'package:flutter/material.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -53,6 +54,7 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
   static const Color _errorColor = Color(0xFFEF4444);
 
   SncfConnectSession? _session;
+  String? _tgvMaxCardNumber;
 
   @override
   void initState() {
@@ -62,9 +64,12 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
 
   Future<void> _loadSession() async {
     await SncfConnectStore().loadSession();
+    await BookingsStore().initialize();
     setState(() {
       _session = SncfConnectStore().session;
+      _tgvMaxCardNumber = BookingsStore().userSession?.cardNumber;
     });
+    debugPrint('[BookingConfirmation] Session loaded - SNCF Connect: ${_session?.isAuthenticated}, TGV Max card: ${_tgvMaxCardNumber != null}');
   }
 
   void _initWebView() {
@@ -93,6 +98,9 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
       )
       ..setNavigationDelegate(
         NavigationDelegate(
+          onPageStarted: (url) {
+            debugPrint('[Booking] Page started: $url');
+          },
           onPageFinished: (url) {
             debugPrint('[Booking] Page finished: $url');
           },
@@ -108,24 +116,45 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
     // Set up navigation listener to detect successful login
     _controller!.setNavigationDelegate(
       NavigationDelegate(
-        onPageFinished: (url) {
-          debugPrint('[Booking] Page finished during login: $url');
-          // Check if we're on a post-login page (not the login page anymore)
-          if (!url.contains('/login') && !url.contains('/auth') &&
-              (url.contains('/home') || url.contains('/search') || url.contains('/account'))) {
-            if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
-              debugPrint('[Booking] Login detected, URL: $url');
-              _loginCompleter!.complete();
+        onPageStarted: (url) {
+          debugPrint('[Booking] Login page started: $url');
+        },
+        onPageFinished: (url) async {
+          debugPrint('[Booking] Login page finished: $url');
+
+          // Skip about:blank
+          if (url == 'about:blank' || url.isEmpty) return;
+
+          // Detect successful OAuth redirect back to sncf-connect.com
+          // After login on monidentifiant.sncf, user is redirected to sncf-connect.com
+          if (url.contains('sncf-connect.com') && !url.contains('monidentifiant')) {
+            // Check if this is the authenticated-redirect or a post-login page
+            if (url.contains('authenticated-redirect') ||
+                url.contains('/authenticate') ||
+                url.contains('/home') ||
+                url.contains('/compte') ||
+                url == 'https://www.sncf-connect.com/' ||
+                url == 'https://www.sncf-connect.com') {
+
+              debugPrint('[Booking] Detected redirect to sncf-connect.com after login!');
+
+              // Wait for page to settle
+              await Future.delayed(const Duration(seconds: 2));
+
+              if (_loginCompleter != null && !_loginCompleter!.isCompleted) {
+                debugPrint('[Booking] Login successful via OAuth redirect!');
+                _loginCompleter!.complete();
+              }
             }
           }
         },
       ),
     );
 
-    // Wait for login or timeout after 2 minutes
+    // Wait for login or timeout after 3 minutes
     try {
       await _loginCompleter!.future.timeout(
-        const Duration(minutes: 2),
+        const Duration(minutes: 3),
         onTimeout: () {
           debugPrint('[Booking] Login timeout');
         },
@@ -181,35 +210,40 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
       final departureTime = widget.train.formattedDeparture; // "05:39" format
       final trainNumber = widget.train.trainNumber;
 
-      // Station ID mapping (IATA code -> SNCF Connect ID)
+      // Station ID mapping - use CITY_FR IDs for cities, or RESARAIL codes for specific stations
+      // SNCF Connect API accepts both formats but prefers CITY_FR for major cities
       const stationMapping = {
-        'FRPST': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRPLY': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRPMO': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRPNO': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRPSL': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRPAU': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRPBE': {'id': 'CITY_FR_6455259', 'label': 'Paris'},
-        'FRLRH': {'id': 'RESARAIL_STA_8748500', 'label': 'La Rochelle Ville'},
-        'FRLYS': {'id': 'RESARAIL_STA_8774319', 'label': 'Lyon Part-Dieu'},
-        'FRLPD': {'id': 'RESARAIL_STA_8774319', 'label': 'Lyon Part-Dieu'},
-        'FRMRS': {'id': 'RESARAIL_STA_8775100', 'label': 'Marseille Saint-Charles'},
-        'FRBOJ': {'id': 'RESARAIL_STA_8758503', 'label': 'Bordeaux Saint-Jean'},
-        'FRNTS': {'id': 'RESARAIL_STA_8757400', 'label': 'Nantes'},
-        'FRTLS': {'id': 'RESARAIL_STA_8775800', 'label': 'Toulouse Matabiau'},
-        'FRSXB': {'id': 'RESARAIL_STA_8717100', 'label': 'Strasbourg'},
-        'FRNCY': {'id': 'RESARAIL_STA_8712700', 'label': 'Nancy'},
-        'FRLIL': {'id': 'RESARAIL_STA_8722326', 'label': 'Lille Flandres'},
-        'FRLEF': {'id': 'RESARAIL_STA_8722326', 'label': 'Lille Flandres'},
-        'FRLLE': {'id': 'RESARAIL_STA_8722400', 'label': 'Lille Europe'},
-        'FRRNS': {'id': 'RESARAIL_STA_8757100', 'label': 'Rennes'},
-        'FRMPL': {'id': 'RESARAIL_STA_8774100', 'label': 'Montpellier Saint-Roch'},
-        'FRNCE': {'id': 'RESARAIL_STA_8775605', 'label': 'Nice Ville'},
-        'FRAIX': {'id': 'RESARAIL_STA_8775122', 'label': 'Aix-en-Provence TGV'},
-        'FRAVE': {'id': 'RESARAIL_STA_8768601', 'label': 'Avignon TGV'},
-        'FRQXB': {'id': 'RESARAIL_STA_8754713', 'label': 'Le Mans'},
-        'FRQAN': {'id': 'RESARAIL_STA_8746105', 'label': 'Angouleme'},
-        'FRPIS': {'id': 'RESARAIL_STA_8746008', 'label': 'Poitiers'},
+        // Paris - use city ID (covers all Paris stations)
+        'FRPST': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPST', 'city': 'Paris'},
+        'FRPLY': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPLY', 'city': 'Paris'},
+        'FRPMO': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPMO', 'city': 'Paris'},
+        'FRPNO': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPNO', 'city': 'Paris'},
+        'FRPSL': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPSL', 'city': 'Paris'},
+        'FRPAU': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPAU', 'city': 'Paris'},
+        'FRPBE': {'id': 'CITY_FR_6455259', 'label': 'Paris', 'resarailCode': 'FRPBE', 'city': 'Paris'},
+        // Lille - use city ID with main station code FRLIL
+        'FRLIL': {'id': 'CITY_FR_6454414', 'label': 'Lille', 'resarailCode': 'FRLIL', 'city': 'Lille'},
+        'FRLEF': {'id': 'CITY_FR_6454414', 'label': 'Lille', 'resarailCode': 'FRLIL', 'city': 'Lille'},
+        'FRLLE': {'id': 'CITY_FR_6454414', 'label': 'Lille', 'resarailCode': 'FRLIL', 'city': 'Lille'},
+        // Other major cities
+        'FRLRH': {'id': 'CITY_FR_6449566', 'label': 'La Rochelle', 'resarailCode': 'FRLRH', 'city': 'La Rochelle'},
+        'FRLYS': {'id': 'CITY_FR_6454573', 'label': 'Lyon', 'resarailCode': 'FRLYS', 'city': 'Lyon'},
+        'FRLPD': {'id': 'CITY_FR_6454573', 'label': 'Lyon', 'resarailCode': 'FRLPD', 'city': 'Lyon'},
+        'FRMRS': {'id': 'CITY_FR_6454974', 'label': 'Marseille', 'resarailCode': 'FRMRS', 'city': 'Marseille'},
+        'FRBOJ': {'id': 'CITY_FR_6451348', 'label': 'Bordeaux', 'resarailCode': 'FRBOJ', 'city': 'Bordeaux'},
+        'FRNTS': {'id': 'CITY_FR_6455254', 'label': 'Nantes', 'resarailCode': 'FRNTS', 'city': 'Nantes'},
+        'FRNTE': {'id': 'CITY_FR_6455254', 'label': 'Nantes', 'resarailCode': 'FRNTE', 'city': 'Nantes'},
+        'FRTLS': {'id': 'CITY_FR_6458094', 'label': 'Toulouse', 'resarailCode': 'FRTLS', 'city': 'Toulouse'},
+        'FRSXB': {'id': 'CITY_FR_6457793', 'label': 'Strasbourg', 'resarailCode': 'FRSXB', 'city': 'Strasbourg'},
+        'FRNCY': {'id': 'CITY_FR_6455213', 'label': 'Nancy', 'resarailCode': 'FRNCY', 'city': 'Nancy'},
+        'FRRNS': {'id': 'CITY_FR_6456628', 'label': 'Rennes', 'resarailCode': 'FRRNS', 'city': 'Rennes'},
+        'FRMPL': {'id': 'CITY_FR_6455066', 'label': 'Montpellier', 'resarailCode': 'FRMPL', 'city': 'Montpellier'},
+        'FRNCE': {'id': 'CITY_FR_6455296', 'label': 'Nice', 'resarailCode': 'FRNCE', 'city': 'Nice'},
+        'FRAIX': {'id': 'CITY_FR_6447068', 'label': 'Aix-en-Provence', 'resarailCode': 'FRAIX', 'city': 'Aix-en-Provence'},
+        'FRAVE': {'id': 'CITY_FR_6449222', 'label': 'Avignon', 'resarailCode': 'FRAVE', 'city': 'Avignon'},
+        'FRQXB': {'id': 'CITY_FR_6449669', 'label': 'Le Mans', 'resarailCode': 'FRQXB', 'city': 'Le Mans'},
+        'FRQAN': {'id': 'CITY_FR_6447479', 'label': 'Angouleme', 'resarailCode': 'FRQAN', 'city': 'Angouleme'},
+        'FRPIS': {'id': 'CITY_FR_6455983', 'label': 'Poitiers', 'resarailCode': 'FRPIS', 'city': 'Poitiers'},
       };
 
       final originMapping = stationMapping[widget.originCode];
@@ -223,6 +257,8 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
       final originLabel = originMapping['label']!;
       final destId = destMapping['id']!;
       final destLabel = destMapping['label']!;
+      final destResarail = destMapping['resarailCode']!;
+      final destCity = destMapping['city']!;
 
       debugPrint('[Booking] Train: $trainNumber a $departureTime');
       debugPrint('[Booking] Route: $originLabel -> $destLabel');
@@ -407,8 +443,69 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
       final profileData = json.decode(profileResult);
       final fetchedUserData = profileData['userData'] as Map<String, dynamic>?;
 
-      if (profileData['initials'] == null) {
-        throw Exception('Non connecte a SNCF Connect. Veuillez vous reconnecter.');
+      // If not logged in, show WebView for login
+      if (profileData['initials'] == null && profileData['isLoggedIn'] != true) {
+        debugPrint('[Booking] Not logged in, showing login WebView');
+        setState(() {
+          _statusMessage = 'Connexion requise...';
+          _showWebView = true;
+        });
+
+        // Use direct SNCF OAuth login URL
+        const loginUrl = 'https://monidentifiant.sncf/login?'
+            'scope=openid%20profile%20email&'
+            'response_type=code&'
+            'client_id=CCL_01002&'
+            'redirect_uri=https%3A%2F%2Fwww.sncf-connect.com%2Fbff%2Fapi%2Fv1%2Fauthenticated-redirect&'
+            'state=eyJzIjoiUzZzaTJ1djZRTCIsInIiOiJodHRwczovL3d3dy5zbmNmLWNvbm5lY3QuY29tL2F1dGhlbnRpY2F0ZSJ9';
+
+        await _controller!.loadRequest(Uri.parse(loginUrl));
+
+        // Wait for user to log in (detect redirect back to sncf-connect.com)
+        await _waitForLogin();
+
+        setState(() {
+          _showWebView = false;
+          _statusMessage = 'Verification connexion...';
+        });
+
+        // Reload homepage to verify login status (avoid about:blank issue)
+        await _controller!.loadRequest(Uri.parse('https://www.sncf-connect.com/'));
+        await Future.delayed(const Duration(seconds: 3));
+
+        // Re-check login status after login
+        final reCheckResult = await _runJsAsync('''
+          let initials = null;
+          let isLoggedIn = false;
+
+          // Check for user indicators
+          const userMenu = document.querySelector('[data-testid="user-menu"], [class*="Avatar"], [class*="UserMenu"]');
+          if (userMenu) isLoggedIn = true;
+
+          // Check for initials
+          const spans = document.querySelectorAll('span, div');
+          for (const span of spans) {
+            const text = span.textContent?.trim();
+            if (text && /^[A-Z]{2}\$/.test(text) && span.offsetWidth > 0 && span.offsetWidth < 60) {
+              initials = text;
+              isLoggedIn = true;
+              break;
+            }
+          }
+
+          // Check localStorage for user data
+          const hasUserData = localStorage.getItem('persist:user') || localStorage.getItem('sncf-user');
+          if (hasUserData) isLoggedIn = true;
+
+          FlutterChannel.postMessage(JSON.stringify({initials: initials, isLoggedIn: isLoggedIn}));
+        ''', timeoutSeconds: 10);
+
+        debugPrint('[Booking] Re-check result: $reCheckResult');
+        final reCheck = json.decode(reCheckResult);
+        if (reCheck['isLoggedIn'] != true) {
+          throw Exception('Connexion annulee ou echouee. Reessayez.');
+        }
+        debugPrint('[Booking] Login successful!');
       }
 
       debugPrint('[Booking] User data fetched: $fetchedUserData');
@@ -428,14 +525,18 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
 
       setState(() => _statusMessage = 'Recherche du train...');
 
-      // Build search time from train departure time (HH:MM -> full ISO)
-      final searchDateTime = '$year-$month-${day}T$departureTime:00.000Z';
+      // Build search date in SNCF format (YYYY-MM-DDTHH:mm:ss)
+      final searchDateTime = '$year-$month-${day}T$departureTime:00';
+
+      // Escape any special characters in names for JSON safety
+      final escapedFirstName = (storedFirstName ?? '').replaceAll('"', '\\"').replaceAll('\n', '');
+      final escapedLastName = (storedLastName ?? '').replaceAll('"', '\\"').replaceAll('\n', '');
 
       // Step 2: Search for trains with COMPLETE passenger data
       final searchResult = await _runJsAsync('''
         const storedCardNumber = "$storedCardNumber";
-        const storedFirstName = "${storedFirstName ?? ''}";
-        const storedLastName = "${storedLastName ?? ''}";
+        const storedFirstName = "$escapedFirstName";
+        const storedLastName = "$escapedLastName";
         const targetTime = "$departureTime";
         const targetTrainNumber = "$trainNumber";
 
@@ -447,76 +548,115 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
           });
         }
 
-        // Build passenger with ALL REQUIRED fields
-        // Calculate age (assuming young person ~22 years old for TGV MAX)
+        const passengerId = uuid();
         const birthYear = new Date().getFullYear() - 22;
-        const dateOfBirth = birthYear + "-01-15";  // Placeholder date
-        const age = 22;
 
-        const passenger = {
-          id: uuid(),
-          typology: "YOUNG",
-          age: age,
-          dateOfBirth: dateOfBirth,
-          withoutSeatAssignment: false,
-          hasDisability: false,
-          hasWheelchair: false,
-          // Add name
-          firstName: storedFirstName,
-          lastName: storedLastName,
-          displayName: storedFirstName + " " + storedLastName,
-          initials: (storedFirstName[0] || "") + (storedLastName[0] || ""),
-          // CRITICAL: TGV MAX card with NUMBER
-          discountCards: [{
-            code: "TGV_MAX",
-            number: storedCardNumber,
-            label: "MAX JEUNE",
-            selected: true,
-            storedInAccount: true
-          }]
-        };
+        // Try to fetch real passenger data from SNCF session first
+        let passenger = null;
+        try {
+          const passengersResp = await fetch("/bff/api/v1/passengers", {
+            credentials: "include",
+            headers: {
+              "Accept": "application/json",
+              "x-bff-key": "ah1MPO-izehIHD-QZZ9y88n-kku876",
+              "x-client-app-id": "front-web",
+              "x-market-locale": "fr_FR"
+            }
+          });
+          if (passengersResp.ok) {
+            const passengersData = await passengersResp.json();
+            console.log("[Booking] Passengers API response:", JSON.stringify(passengersData).substring(0, 500));
+            // Use the first passenger from the response
+            if (passengersData.passengers && passengersData.passengers.length > 0) {
+              passenger = passengersData.passengers[0];
+              console.log("[Booking] Using passenger from API:", passenger.customerId);
+            } else if (passengersData.length > 0) {
+              passenger = passengersData[0];
+              console.log("[Booking] Using passenger from array:", passenger.customerId);
+            }
+          }
+        } catch(e) {
+          console.log("[Booking] Failed to fetch passengers:", e.toString());
+        }
+
+        // Fallback: construct passenger manually if API didn't return data
+        if (!passenger) {
+          passenger = {
+            id: passengerId,
+            customerId: passengerId,
+            typology: "YOUNG",
+            firstName: storedFirstName || "Voyageur",
+            lastName: storedLastName || "TGV Max",
+            displayName: (storedFirstName && storedLastName) ? (storedFirstName + " " + storedLastName) : "Voyageur TGV Max",
+            initials: (storedFirstName && storedLastName) ? (storedFirstName[0] + storedLastName[0]) : "VT",
+            age: 22,
+            dateOfBirth: birthYear + "-01-15",
+            hasDisability: false,
+            hasWheelchair: false,
+            withoutSeatAssignment: false,
+            discountCards: [
+              {
+                code: "YOUNG_PASS",
+                number: storedCardNumber,
+                label: "Carte Avantage Jeune"
+              },
+              {
+                code: "MAX_JEUNE",
+                number: storedCardNumber,
+                label: "MAX JEUNE"
+              }
+            ]
+          };
+        }
 
         console.log("[Booking] Passenger:", JSON.stringify(passenger));
 
+        // SNCF Connect format - complete search body (matches working request structure)
         const searchBody = {
           schedule: {
             outward: {
-              date: "$searchDateTime",
+              date: "$searchDateTime.000Z",
               arrivalAt: false
             }
           },
           mainJourney: {
             origin: {
-              label: "$originLabel",
               id: "$originId",
+              label: "$originLabel",
               codes: [],
               geolocation: false
             },
             destination: {
-              label: "$destLabel",
               id: "$destId",
+              label: "$destLabel",
+              codes: [{type: "RESARAIL", value: "$destResarail"}],
               geolocation: false,
-              codes: []
+              resarailCode: "$destResarail",
+              city: "$destCity"
             }
           },
           passengers: [passenger],
           pets: [],
+          metadataY: {
+            decisionAction: "OUTWARD DATE"
+          },
+          branch: "SHOP",
+          directJourney: false,
           forceDisplayResults: true,
           trainExpected: true,
-          wishBike: false,
           strictMode: false,
-          directJourney: false,
-          transporterLabels: [],
           shortItineraryFilters: {
             excludableLineCategories: [],
             includibleTransportTypes: [],
             excludableConnections: [],
             wheelchairAccessible: "NOT_SELECTED"
           },
-          userNavigation: ["IS_NOT_BUSINESS"]
+          userNavigation: ["IS_NOT_BUSINESS"],
+          wishBike: false,
+          transporterLabels: []
         };
 
-        console.log("[Booking] Search body:", JSON.stringify(searchBody, null, 2));
+        const searchBodyStr = JSON.stringify(searchBody);
 
         const resp = await fetch("/bff/api/v1/itineraries", {
           method: "POST",
@@ -528,9 +668,13 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
             "x-client-app-id": "front-web",
             "x-market-locale": "fr_FR",
             "x-api-env": "production",
-            "x-client-channel": "web"
+            "x-client-channel": "web",
+            "x-device-class": "desktop",
+            "x-visitor-type": "1",
+            "x-search-usage": "AUTOCOMPLETION",
+            "virtual-env-name": "master"
           },
-          body: JSON.stringify(searchBody)
+          body: searchBodyStr
         });
 
         if (!resp.ok) {
@@ -538,7 +682,10 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
           FlutterChannel.postMessage(JSON.stringify({
             error: "Recherche echouee: " + resp.status,
             details: err.substring(0, 500),
-            passengerSent: JSON.stringify(passenger)
+            passengerSent: JSON.stringify(passenger),
+            scheduleSent: JSON.stringify(searchBody.schedule),
+            mainJourneySent: JSON.stringify(searchBody.mainJourney),
+            bodyLength: searchBodyStr.length
           }));
           return;
         }
@@ -600,7 +747,14 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
       final searchData = json.decode(searchResult);
 
       if (searchData['error'] != null) {
-        throw Exception('${searchData['error']}\\n${searchData['details'] ?? ''}');
+        // Log debug info
+        debugPrint('[Booking] === DEBUG INFO ===');
+        debugPrint('[Booking] Body length: ${searchData['bodyLength']}');
+        debugPrint('[Booking] Passenger sent: ${searchData['passengerSent']}');
+        debugPrint('[Booking] Schedule sent: ${searchData['scheduleSent']}');
+        debugPrint('[Booking] MainJourney sent: ${searchData['mainJourneySent']}');
+        debugPrint('[Booking] Error details: ${searchData['details']}');
+        throw Exception('${searchData['error']}');
       }
 
       setState(() => _statusMessage = 'Ajout au panier...');
@@ -1080,7 +1234,9 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
             ),
             child: Center(
               child: Text(
-                _session?.displayName?.substring(0, 2).toUpperCase() ?? 'U',
+                _session?.displayName?.isNotEmpty == true
+                    ? _session!.displayName!.substring(0, min(_session!.displayName!.length, 2)).toUpperCase()
+                    : 'U',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
@@ -1297,6 +1453,31 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen> {
 
   Widget _buildBookButton() {
     final isConnected = _session?.isAuthenticated ?? false;
+    final hasCardNumber = _tgvMaxCardNumber != null && _tgvMaxCardNumber!.isNotEmpty;
+
+    // Check if TGV Max card number is missing
+    if (!hasCardNumber) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.orange.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(PhosphorIcons.warning(PhosphorIconsStyle.fill), size: 24, color: Colors.orange),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Text(
+                'Connectez-vous dans Mon Max pour recuperer votre numero de carte TGV MAX.',
+                style: TextStyle(fontSize: 13, color: _textSecondary),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (!isConnected) {
       return Container(

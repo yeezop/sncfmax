@@ -5,6 +5,7 @@ import '../models/booking.dart';
 import '../services/backend_api_service.dart';
 import '../services/silent_refresh_service.dart';
 import 'sncf_login_screen.dart';
+import 'auto_confirm_settings_screen.dart';
 
 class MonMaxScreen extends StatefulWidget {
   const MonMaxScreen({super.key});
@@ -149,6 +150,14 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
     }
   }
 
+  void _openAutoConfirmSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const AutoConfirmSettingsScreen(),
+      ),
+    );
+  }
+
   /// Refresh bookings silently using WebView cookies (real fresh data)
   Future<void> _refreshSilently() async {
     if (_isLoading) return;
@@ -202,7 +211,7 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
           );
         }
       } else if (result.needsReauth) {
-        // Session expired - need to re-login
+        // Session expired - show message but keep cached data visible
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -214,17 +223,20 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
                     size: 20,
                   ),
                   const SizedBox(width: 12),
-                  const Text('Session expiree, reconnexion...'),
+                  const Expanded(
+                    child: Text('Session expiree. Reconnectez-vous pour actualiser.'),
+                  ),
                 ],
               ),
               backgroundColor: _warningColor,
-              duration: const Duration(seconds: 2),
+              duration: const Duration(seconds: 3),
+              action: SnackBarAction(
+                label: 'Connexion',
+                textColor: Colors.white,
+                onPressed: _openLogin,
+              ),
             ),
           );
-          await Future.delayed(const Duration(seconds: 1));
-          if (mounted) {
-            await _openLogin();
-          }
         }
       } else {
         throw Exception(result.error ?? 'Erreur inconnue');
@@ -311,21 +323,62 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
                 ],
               ),
               const SizedBox(height: 4),
-              Text(
-                _store.isAuthenticated
-                    ? 'Bonjour, ${_store.userSession?.firstName ?? ""}!'
-                    : 'Vos reservations TGV Max',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: _textMuted,
-                  fontWeight: FontWeight.w400,
-                ),
+              Row(
+                children: [
+                  Text(
+                    _store.isAuthenticated
+                        ? 'Bonjour, ${_store.userSession?.firstName ?? ""}!'
+                        : 'Vos reservations TGV Max',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: _textMuted,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                  if (_store.isAuthenticated && _store.lastUpdated != null) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _store.isDataStale
+                            ? _warningColor.withOpacity(0.1)
+                            : _successColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _store.lastUpdatedFormatted,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _store.isDataStale ? _warningColor : _successColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),
           if (_store.isAuthenticated)
             Row(
               children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: _surfaceColor,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _borderColor),
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                      PhosphorIcons.robot(PhosphorIconsStyle.regular),
+                      size: 22,
+                      color: _textSecondary,
+                    ),
+                    onPressed: _openAutoConfirmSettings,
+                    tooltip: 'Confirmation auto',
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Container(
                   decoration: BoxDecoration(
                     color: _surfaceColor,
@@ -989,11 +1042,15 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Session expiree, veuillez vous reconnecter'),
+              content: const Text('Session expiree'),
               backgroundColor: _warningColor,
+              action: SnackBarAction(
+                label: 'Connexion',
+                textColor: Colors.white,
+                onPressed: _openLogin,
+              ),
             ),
           );
-          await _openLogin();
         }
       } else {
         throw Exception(result.error ?? 'Erreur inconnue');
@@ -1033,10 +1090,13 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
         );
       }
     } else {
-      // Schedule
+      // Schedule locally
       _scheduledAutoConfirms.add(booking.orderId);
       await _saveScheduledAutoConfirms();
       setState(() {});
+
+      // Also try to schedule on backend (if connected via Puppeteer)
+      final backendScheduled = await BackendApiService().scheduleAutoConfirm(booking);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1045,10 +1105,16 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
               children: [
                 Icon(PhosphorIcons.bellRinging(PhosphorIconsStyle.fill), color: Colors.white, size: 20),
                 const SizedBox(width: 12),
-                Expanded(child: Text('Confirmation auto programmee pour ${booking.confirmationAvailableFormatted}')),
+                Expanded(
+                  child: Text(
+                    backendScheduled
+                        ? 'Confirmation auto programmee (serveur)'
+                        : 'Confirmation auto programmee pour ${booking.confirmationAvailableFormatted}',
+                  ),
+                ),
               ],
             ),
-            backgroundColor: _accentColor,
+            backgroundColor: backendScheduled ? _successColor : _accentColor,
             duration: const Duration(seconds: 4),
           ),
         );
@@ -1111,11 +1177,15 @@ class _MonMaxScreenState extends State<MonMaxScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Session expiree, veuillez vous reconnecter'),
+              content: const Text('Session expiree'),
               backgroundColor: _warningColor,
+              action: SnackBarAction(
+                label: 'Connexion',
+                textColor: Colors.white,
+                onPressed: _openLogin,
+              ),
             ),
           );
-          await _openLogin();
         }
       } else {
         throw Exception(result.error ?? 'Erreur inconnue');

@@ -164,6 +164,44 @@ Headers required: `x-client-app: MAX_JEUNE`, `credentials: include`
 - `lib/services/sncf_api_service.dart`
 - `lib/services/cookie_manager.dart`
 
+## VPS Deployment
+
+### Access
+- **Host**: `vps` (alias configuré dans `~/.ssh/config`)
+- **IP**: 51.210.111.11
+- **User**: debian
+- **Auth**: Clé SSH (pas de mot de passe nécessaire)
+
+### Paths on VPS
+| Service | Path | Container |
+|---------|------|-----------|
+| Backend | `/home/debian/sncfmax-backend` | `sncfmax-backend` (port 3000) |
+| Discord Bot | `/home/debian/discord-bot` | `paris-lille-monitor` |
+
+### Deploy Commands
+```bash
+# Connect to VPS
+ssh vps
+
+# Deploy backend
+ssh vps "cd /home/debian/sncfmax-backend && docker-compose up -d --build"
+
+# View backend logs
+ssh vps "docker logs -f sncfmax-backend"
+
+# Restart backend
+ssh vps "docker restart sncfmax-backend"
+
+# Copy local file to VPS
+scp backend/server.js vps:/home/debian/sncfmax-backend/
+```
+
+### Quick Deploy (from local)
+```bash
+# Copy and rebuild
+scp backend/server.js vps:/home/debian/sncfmax-backend/ && ssh vps "cd /home/debian/sncfmax-backend && docker-compose up -d --build"
+```
+
 ## Known Limitations
 
 - DataDome captcha cannot be solved automatically (backend waits 5s then continues)

@@ -9,6 +9,10 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      - PROXY_HOST=ae685ce40408103e.dmv.eu.pyproxy.io
+      - PROXY_PORT=16666
+      - PROXY_USERNAME=py450534-zone-resi-region-fr
+      - PROXY_PASSWORD=py450534
     # Security options for Chromium
     cap_add:
       - SYS_ADMIN

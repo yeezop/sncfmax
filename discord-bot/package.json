@@ -4,7 +4,8 @@
   "description": "Discord bot for TGV Max availability alerts",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "paris-lille": "node paris-lille-monitor.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",

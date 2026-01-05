@@ -242,15 +242,40 @@ class BookingsStore {
 
   static const String _sessionKey = 'mon_max_session';
   static const String _bookingsKey = 'mon_max_bookings';
+  static const String _lastUpdatedKey = 'mon_max_last_updated';
 
   UserSession? _userSession;
   List<Booking> _bookings = [];
+  DateTime? _lastUpdated;
   bool _initialized = false;
 
   bool get isAuthenticated => _userSession?.isAuthenticated ?? false;
   UserSession? get userSession => _userSession;
   List<Booking> get bookings => _bookings;
   String? get cardNumber => _userSession?.cardNumber;
+  DateTime? get lastUpdated => _lastUpdated;
+
+  /// Check if data is stale (older than 24h)
+  bool get isDataStale {
+    if (_lastUpdated == null) return true;
+    return DateTime.now().difference(_lastUpdated!).inHours > 24;
+  }
+
+  /// Formatted last updated string
+  String get lastUpdatedFormatted {
+    if (_lastUpdated == null) return 'Jamais';
+    final now = DateTime.now();
+    final diff = now.difference(_lastUpdated!);
+
+    if (diff.inMinutes < 1) return 'À l\'instant';
+    if (diff.inMinutes < 60) return 'Il y a ${diff.inMinutes} min';
+    if (diff.inHours < 24) return 'Il y a ${diff.inHours}h';
+    if (diff.inDays == 1) return 'Hier';
+    if (diff.inDays < 7) return 'Il y a ${diff.inDays} jours';
+
+    final months = ['jan', 'fév', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'];
+    return '${_lastUpdated!.day} ${months[_lastUpdated!.month - 1]}';
+  }
 
   /// Initialize store from SharedPreferences (call on app start)
   Future<void> initialize() async {
@@ -281,6 +306,12 @@ class BookingsStore {
             .toList();
       }
 
+      // Load last updated timestamp
+      final lastUpdatedMs = prefs.getInt(_lastUpdatedKey);
+      if (lastUpdatedMs != null) {
+        _lastUpdated = DateTime.fromMillisecondsSinceEpoch(lastUpdatedMs);
+      }
+
       _initialized = true;
     } catch (e) {
       // Ignore errors, start fresh
@@ -291,22 +322,26 @@ class BookingsStore {
   Future<void> storeSession(UserSession session, List<Booking> bookings) async {
     _userSession = session;
     _bookings = bookings;
+    _lastUpdated = DateTime.now();
     await _persist();
   }
 
   Future<void> updateBookings(List<Booking> bookings) async {
     _bookings = bookings;
+    _lastUpdated = DateTime.now();
     await _persist();
   }
 
   Future<void> clear() async {
     _userSession = null;
     _bookings = [];
+    _lastUpdated = null;
 
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_sessionKey);
       await prefs.remove(_bookingsKey);
+      await prefs.remove(_lastUpdatedKey);
     } catch (e) {
       // Ignore
     }
@@ -322,6 +357,10 @@ class BookingsStore {
 
       final bookingsData = _bookings.map((b) => b.toJson()).toList();
       await prefs.setString(_bookingsKey, jsonEncode(bookingsData));
+
+      if (_lastUpdated != null) {
+        await prefs.setInt(_lastUpdatedKey, _lastUpdated!.millisecondsSinceEpoch);
+      }
     } catch (e) {
       // Ignore persistence errors
     }
